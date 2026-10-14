@@ -48,13 +48,7 @@ public class User implements Identifiable {
         this.username = username;
     }
 
-    public String getPasswordHash() {
-        return passwordHash;
-    }
 
-    public String getDisplayName() {
-        return displayName;
-    }
 
     public void setDisplayName(String displayName) {
         this.displayName = displayName;
