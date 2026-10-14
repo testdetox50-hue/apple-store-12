@@ -22,14 +22,6 @@ public class User implements Identifiable {
     public User() {
     }
 
-    public User(String id, String username, String passwordHash, String role, String displayName) {
-        this.id = id;
-        this.username = username;
-        this.passwordHash = passwordHash;
-        this.role = role;
-        this.displayName = displayName;
-    }
-
     @Override
     public String getId() {
         return id;
