@@ -3,62 +3,6 @@ package com.shopflow.common.model;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * An application user who can log in to the desktop client.
- * The password is stored only as a salted hash on the backend;
- * the hash is never sent to the frontend.
- */
-public class User implements Identifiable {
-
-    public static final String ROLE_ADMIN = "ADMIN";
-    public static final String ROLE_STAFF = "STAFF";
-
-    private String id;
-    private String username;
-    private String passwordHash;
-    private String role = ROLE_STAFF;
-    private String displayName;
-
-    public User() {
-    }
-
-    public User(String id, String username, String passwordHash, String role, String displayName) {
-        this.id = id;
-        this.username = username;
-        this.passwordHash = passwordHash;
-        this.role = role;
-        this.displayName = displayName;
-    }
-
-    @Override
-    public String getId() {
-        return id;
-    }
-
-    @Override
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public String getPasswordHash() {
-        return passwordHash;
-    }
-
-    public void setPasswordHash(String passwordHash) {
-        this.passwordHash = passwordHash;
-    }
-
-    public String getRole() {
-        return role;
-    }
 
     public void setRole(String role) {
         this.role = role;
