@@ -1,33 +1,32 @@
-# apple-store-12 reviewer notes
+# shopflow reviewer notes
 
 ## Architecture
 
-ShopFlow is a dependency-free Java 17 inventory and order-management system split into `common`, `backend`, and Swing `frontend` modules (`shopflow/README.md`). The backend wires repositories, services, controllers, persistence, and the JDK HTTP server in `backend/src/com/shopflow/backend/Main.java`. Data is held in thread-safe in-memory repositories and persisted as one JSON array per entity; report endpoints additionally invoke the single Python report script.
+ShopFlow is a dependency-free Java 17 inventory and order system split into `common`, `backend`, and `frontend` modules (`shopflow/README.md`). The backend wires repositories, services, controllers, persistence, and the JDK HTTP server in `backend/src/com/shopflow/backend/Main.java`. Domain data lives in thread-safe in-memory repositories and is persisted as one JSON array per entity; reporting is the deliberate exception, invoking the Python script through `ReportService`.
 
 ## Conventions
 
-- Controllers are thin HTTP adapters: register routes, parse `RequestContext`, delegate business logic to services, and shape responses. See `CategoryController`, `ProductController`, and `OrderController`.
-- Routes use explicit REST-style method/path registration, with path variables written as `{id}` and query values read through `ctx.query(...)`; each controller owns its `/api/<resource>` routes.
-- Successful creates set HTTP 201, and deletes set 204 with a `null` body, consistently in `CategoryController`, `CustomerController`, `ProductController`, and `OrderController`.
-- Collection responses generally use `JsonResponse.page(items, total, offset, limit)`, even for currently unpaginated lists (`CategoryController`, `CustomerController`, `OrderController`). Product listing clamps offset and limit and caps limit at 500 (`ProductController.list`).
-- JSON conversion belongs to models or shared helpers: controllers use methods such as `Product.toJson()`, `Order.toJson()`, `User.toPublicJson()`, and `Json.toJsonList(...)` rather than manually serializing fields.
-- Business rules belong in services/repositories, not controllers. For example, order creation and status transitions are delegated to `OrderService`, while repository classes provide domain lookups such as `ProductRepository.findLowStock()` and `OrderRepository.referencesProduct()`.
-- Repository classes extend `InMemoryRepository<T>`, use short ID prefixes (`"prd"`, `"cus"`, `"ord"`), and expose full JSON file names through `getName()` (`ProductRepository`, `CustomerRepository`, `OrderRepository`).
-- Entity ordering is deliberate: base repositories sort by ID, while `OrderRepository` overrides this to return newest orders first.
-- Persistence files must remain plain JSON arrays of entity objects because both `FileStore` and the Python report script consume them (`FileStore.java`).
-- Authentication is enforced centrally by `Router`/`RequestContext`; only explicitly registered `open(...)` routes, such as login and `/api/health`, are unauthenticated (`AuthController`, `ReportController`).
-- Configuration is read through `ServerConfig` from system properties/environment variables; avoid hardcoding deployment paths or ports (`shopflow/README.md`, `Main.java`).
+- Controllers are thin HTTP adapters: register routes, parse request data, set status codes, and delegate business logic to services. Examples include `CategoryController.java`, `ProductController.java`, and `OrderController.java`.
+- Every controller exposes a `register(Router router)` method and uses path templates such as `/api/products/{id}`. Keep route registration order in mind; `/api/orders/statuses` is registered before `/api/orders/{id}` in `OrderController.java`.
+- Successful creation returns HTTP `201`; deletes return `204` with a `null` body. This pattern is consistent across `CategoryController`, `CustomerController`, `ProductController`, `OrderController`, and `AuthController`.
+- Collection responses use `JsonResponse.page(items, total, offset, limit)`. Most endpoints return the complete collection with offset `0`; product listing additionally clamps `offset` and `limit` (`ProductController.java`).
+- JSON conversion belongs at the controller/model boundary: use model methods such as `Order::toJson`, `User::toPublicJson`, and enrichment methods such as `ProductService.enrich`, rather than exposing persistence objects directly.
+- Repositories extend `InMemoryRepository<T>`, provide a short ID prefix and a stable persistence name, and implement `fromJson` (`ProductRepository.java`, `CustomerRepository.java`). Entity searches and uniqueness checks are repository helpers.
+- `InMemoryRepository` sorts normal entity lists by ID; `OrderRepository` intentionally overrides this to return newest orders first. Preserve that ordering when adding order queries.
+- Mutations must go through repository `save`/`delete`. The attached `FileStore` listener persists every change, and `InMemoryRepository` rolls back the in-memory mutation if persistence fails (`InMemoryRepository.java`, `FileStore.java`).
+- Persisted files must remain plain JSON arrays because both Java loading and the Python report script consume them (`FileStore.java`, `shopflow/README.md`).
+- Authentication is enforced centrally by the router except for explicitly open endpoints. Controllers still perform operation-specific checks, such as admin-only order deletion in `OrderController.java`.
 
 ## Intentional non-standard choices
 
-- The project deliberately has no third-party dependencies and uses `com.sun.net.httpserver.HttpServer` plus a custom JSON implementation (`shopflow/README.md`).
-- Report generation intentionally launches Python for every report request; Python is not a replacement backend and failures should be isolated to report/dashboard functionality (`ReportController.java`, `shopflow/README.md`).
-- Repository writes persist synchronously on every mutation. `InMemoryRepository` rolls back the in-memory change if the atomic `FileStore` write fails; this behavior is intentional consistency protection.
+- Reports intentionally depend on an external Python subprocess for every report request; this is not a Java library integration bug (`ReportController.java`, `shopflow/README.md`). Python failure should affect report views, not unrelated API screens.
+- “Seed” behavior is conditional and asymmetric: catalog data is inserted only when categories and products are both empty, while bootstrap admin creation is refused without an explicitly configured password (`SeedData.java`).
+- All writes use a temporary file followed by an atomic move, and repository changes are rolled back when saving fails. Do not simplify this into best-effort persistence (`FileStore.java`, `InMemoryRepository.java`).
 
 ## Watch out for
 
-- Do not bypass repository `save`/`delete`; doing so skips persistence and rollback behavior (`InMemoryRepository.java`).
-- Preserve atomic temp-file replacement and JSON-array format in `FileStore`; changing either can corrupt data or break Python reports.
-- Avoid exposing password fields: user responses should use `User.toPublicJson()`, as in `AuthController`.
-- Preserve order stock and lifecycle rules in services; seeded orders explicitly reserve stock (`SeedData.reserveStock`), and open-order references affect deletion logic.
-- When adding routes, ensure protected endpoints are not registered with `router.open(...)`, and place specific routes such as `/api/orders/statuses` before parameterized order routes (`OrderController.register`).
+- Do not add direct file writes, alternate JSON shapes, or repository mutations that bypass the change listener; this can desynchronize memory, disk, and Python reports.
+- Preserve stock/order invariants in service-layer changes: seeded orders reserve stock (`SeedData.java`), and open-order references affect deletion behavior (`OrderRepository.java`).
+- Avoid returning password hashes or internal user fields; authentication endpoints deliberately use `User.toPublicJson()` (`AuthController.java`).
+- Validate numeric and required request fields before service calls, following `ProductController.adjustStock` and `OrderController.changeStatus`.
+- Keep case-insensitive uniqueness/search semantics using `Locale.ROOT`, as implemented by `ProductRepository` and `CustomerRepository`.
