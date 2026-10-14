@@ -1,32 +1,33 @@
-# shopflow reviewer notes
+# apple-store-12 reviewer notes
 
 ## Architecture
 
-ShopFlow is a dependency-free Java 17 inventory and order system split into `common`, `backend`, and `frontend` modules (`shopflow/README.md`). The backend wires repositories, services, controllers, persistence, and the JDK HTTP server in `backend/src/com/shopflow/backend/Main.java`. Domain data lives in thread-safe in-memory repositories and is persisted as one JSON array per entity; reporting is the deliberate exception, invoking the Python script through `ReportService`.
+ShopFlow is a dependency-free Java 17 inventory/order system split into `common`, `backend`, and Swing `frontend` modules (`shopflow/README.md`). The backend wires repositories, services, controllers, routing, persistence, and the JDK HTTP server in `backend/src/com/shopflow/backend/Main.java`. Repositories hold in-memory entities backed by per-entity JSON files; report endpoints additionally invoke the sole Python service script.
 
 ## Conventions
 
-- Controllers are thin HTTP adapters: register routes, parse request data, set status codes, and delegate business logic to services. Examples include `CategoryController.java`, `ProductController.java`, and `OrderController.java`.
-- Every controller exposes a `register(Router router)` method and uses path templates such as `/api/products/{id}`. Keep route registration order in mind; `/api/orders/statuses` is registered before `/api/orders/{id}` in `OrderController.java`.
-- Successful creation returns HTTP `201`; deletes return `204` with a `null` body. This pattern is consistent across `CategoryController`, `CustomerController`, `ProductController`, `OrderController`, and `AuthController`.
-- Collection responses use `JsonResponse.page(items, total, offset, limit)`. Most endpoints return the complete collection with offset `0`; product listing additionally clamps `offset` and `limit` (`ProductController.java`).
-- JSON conversion belongs at the controller/model boundary: use model methods such as `Order::toJson`, `User::toPublicJson`, and enrichment methods such as `ProductService.enrich`, rather than exposing persistence objects directly.
-- Repositories extend `InMemoryRepository<T>`, provide a short ID prefix and a stable persistence name, and implement `fromJson` (`ProductRepository.java`, `CustomerRepository.java`). Entity searches and uniqueness checks are repository helpers.
-- `InMemoryRepository` sorts normal entity lists by ID; `OrderRepository` intentionally overrides this to return newest orders first. Preserve that ordering when adding order queries.
-- Mutations must go through repository `save`/`delete`. The attached `FileStore` listener persists every change, and `InMemoryRepository` rolls back the in-memory mutation if persistence fails (`InMemoryRepository.java`, `FileStore.java`).
-- Persisted files must remain plain JSON arrays because both Java loading and the Python report script consume them (`FileStore.java`, `shopflow/README.md`).
-- Authentication is enforced centrally by the router except for explicitly open endpoints. Controllers still perform operation-specific checks, such as admin-only order deletion in `OrderController.java`.
+- Controllers are thin HTTP adapters: register routes, read `RequestContext`, delegate business logic to services, and shape JSON responses. Follow examples in `backend/src/com/shopflow/backend/controller/ProductController.java` and `OrderController.java`.
+- Routes use explicit HTTP verbs and `/api/<entity>` paths, with `{id}` path parameters. Each controller owns a `register(Router)` method; new endpoints should follow this pattern.
+- Collection responses use `JsonResponse.page(items, total, offset, limit)`, even where the current implementation returns the complete collection. See `CategoryController`, `CustomerController`, and `OrderController`.
+- Successful creates set HTTP 201; deletes set 204 and return `null`. See `CategoryController.java` and `AuthController.java`.
+- JSON conversion belongs at the boundary or model layer: use `toJson()`/`toPublicJson()` and helpers such as `Json.toJsonList`, rather than exposing entities indiscriminately. Authentication responses deliberately use `User.toPublicJson()`.
+- Repositories extend `InMemoryRepository<T>`, provide a JSON factory, and expose domain-specific lookups. Persistence names are stable file names such as `categories.json`, `products.json`, and `orders.json`; see `CategoryRepository.java` and `FileStore.java`.
+- Search is case-insensitive and uses `Locale.ROOT`; uniqueness helpers trim or compare case-insensitively where appropriate (`ProductRepository`, `CustomerRepository`, `CategoryRepository`).
+- Services, rather than controllers, should enforce domain rules and coordinate repositories. `Main.java` demonstrates the dependency order and composition.
+- All endpoints are authenticated by default; only explicitly registered `open` routes such as login and `/api/health` bypass authentication (`AuthController.java`, `ReportController.java`).
 
 ## Intentional non-standard choices
 
-- Reports intentionally depend on an external Python subprocess for every report request; this is not a Java library integration bug (`ReportController.java`, `shopflow/README.md`). Python failure should affect report views, not unrelated API screens.
-- “Seed” behavior is conditional and asymmetric: catalog data is inserted only when categories and products are both empty, while bootstrap admin creation is refused without an explicitly configured password (`SeedData.java`).
-- All writes use a temporary file followed by an atomic move, and repository changes are rolled back when saving fails. Do not simplify this into best-effort persistence (`FileStore.java`, `InMemoryRepository.java`).
+- The backend intentionally has no framework or third-party dependencies and uses `com.sun.net.httpserver.HttpServer` (`Main.java`).
+- Data is intentionally stored as pretty-printed JSON arrays, not a database. `FileStore.save()` writes a temporary file and atomically moves it into place because the Python report script reads the same files (`FileStore.java`, `shopflow/README.md`).
+- Reports intentionally spawn the Python script for each report request; Python failure affects only report/dashboard functionality (`ReportController.java`, `shopflow/README.md`).
+- `InMemoryRepository.save/delete` rolls back its in-memory mutation when persistence fails, preserving memory/disk consistency (`InMemoryRepository.java`).
 
 ## Watch out for
 
-- Do not add direct file writes, alternate JSON shapes, or repository mutations that bypass the change listener; this can desynchronize memory, disk, and Python reports.
-- Preserve stock/order invariants in service-layer changes: seeded orders reserve stock (`SeedData.java`), and open-order references affect deletion behavior (`OrderRepository.java`).
-- Avoid returning password hashes or internal user fields; authentication endpoints deliberately use `User.toPublicJson()` (`AuthController.java`).
-- Validate numeric and required request fields before service calls, following `ProductController.adjustStock` and `OrderController.changeStatus`.
-- Keep case-insensitive uniqueness/search semantics using `Locale.ROOT`, as implemented by `ProductRepository` and `CustomerRepository`.
+- Do not bypass repositories or mutate entities without saving them; the change listener persists only repository writes (`InMemoryRepository.java`).
+- Preserve JSON field shapes and entity filenames: they are shared with `report_service.py` and loaded through each repository’s `fromJson`.
+- Do not expose passwords or password hashes; authentication user responses must remain public projections (`AuthController.java`).
+- Preserve order-specific behavior: orders are newest-first (`OrderRepository.java`), open-order references constrain product/customer operations, and seeded orders reserve stock (`SeedData.java`).
+- Maintain route registration order where static paths such as `/api/orders/statuses` coexist with `/{id}` routes (`OrderController.java`).
+- Keep pagination bounds and validation when changing product listing or mutation endpoints; `ProductController` caps `limit` at 500 and rejects missing stock `delta`.
